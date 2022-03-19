@@ -2,6 +2,7 @@ package study.querydsl;
 
 import com.querydsl.core.QueryResults;
 import com.querydsl.core.Tuple;
+import com.querydsl.core.types.ExpressionUtils;
 import com.querydsl.core.types.Projections;
 import com.querydsl.core.types.dsl.CaseBuilder;
 import com.querydsl.core.types.dsl.Expressions;
@@ -14,6 +15,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 import study.querydsl.dto.MemberDto;
+import study.querydsl.dto.QMemberDto;
+import study.querydsl.dto.UserDto;
 import study.querydsl.entity.Member;
 import study.querydsl.entity.QMember;
 import study.querydsl.entity.QTeam;
@@ -646,7 +649,7 @@ public class QuerydslBasicTest {
      * getter setter 필요없이 바로 필드에 값을 꽂아버린다.
      */
     @Test
-    public void fondDtoByField() throws Exception {
+    public void findDtoByField() throws Exception {
         List<MemberDto> result = queryFactory
                 .select(Projections.fields(MemberDto.class
                         , member.username
@@ -660,12 +663,13 @@ public class QuerydslBasicTest {
     }
 
     /**
-     * 2. 생성자 방식
+     * 3. 생성자 방식
      * 생성자 호출 방식이기 때문에 객체들의 타입이 딱 맞아야 한다.
      * 실제로 만들어진 생성자를 호출시켜서 진행하는 방법이다.
+     * 생성자 방식은 컴파일 도중에 에러를 찾을 수 없고, 런타임 에러로 발생하게 된다.
      */
     @Test
-    public void fondDtoByConstructor() throws Exception {
+    public void findDtoByConstructor() throws Exception {
         List<MemberDto> result = queryFactory
                 .select(Projections.constructor(MemberDto.class
                         , member.username
@@ -675,6 +679,77 @@ public class QuerydslBasicTest {
 
         for (MemberDto memberDto : result) {
             System.out.println("result = " + memberDto);
+        }
+    }
+
+    /**
+     * 필드 접근 - projection 사용 별칭 부여
+     * 가져오는 값과 저장되는 값의 이름이 다른 경우, 별칭을 사용하여 변환해주면 잘 들어간다.
+     * memberDto -> username / userDto -> name
+     * memberDto의 username을 name으로 변경.
+     */
+    @Test
+    public void findUserDtoByField() throws Exception {
+        QMember memberSub = new QMember("memberSub");
+
+        List<UserDto> result = queryFactory
+                .select(Projections.fields(UserDto.class
+                        , member.username.as("name")
+                        /**
+                         * subquery를 사용하여 나이를 모두 최대나이로 맞추려고 한다.
+                         * 해당 예제를 사용한 이유는 서브쿼리에서 별칭 사용에 관해 알기 위함이다.(subquery alias)
+                         * 서브쿼리에서 가져온 값을 감싸서 alias해 줄 수 있다. -> 이를 통해 매칭
+                         * subquery는 이렇게 ExpressionUtils로 감싸서 해당 값에 alias해두어야 한다.
+                         */
+                        , ExpressionUtils.as(JPAExpressions
+                                .select(memberSub.age.max())
+                                .from(memberSub), "age")
+                ))
+                .from(member)
+                .fetch();
+
+        for (UserDto userDto : result) {
+            System.out.println("userdto = " + userDto);
+        }
+    }
+
+    /**
+     * 생성자 - projection 사용 별칭 부여
+     * 생성자는 만들어진 생성자에 값을 넣으므로 따로 별칭을 사용하지 않고도 타입이 맞으면 잘 들어간다.
+     * @throws Exception
+     */
+    @Test
+    public void findUserDtoByConstructor() throws Exception {
+        List<UserDto> result = queryFactory
+                .select(Projections.constructor(UserDto.class
+                        , member.username
+                        , member.age))
+                .from(member)
+                .fetch();
+
+        for (UserDto userDto : result) {
+            System.out.println("result = " + userDto);
+        }
+    }
+
+    /**
+     * DTO에 @QueryProjection을 지정하여 사용하는 방법 - 이 방식은 3번째 constructor사용 방식을 대체한다.
+     * 매우 쉬운 방법이고, 컴파일 시점에 바로 에러 확인도 가능하다.
+     * 단, 한가지 고민거리가 생기는데 dto가 querydsl과 관련한 의존성을 갖게 된다.
+     * 이후 querydsl을 빼게 되면 이런 dto들이 영향을 받게 될 것이다.
+     * 그리고 dto는 여러 레이어에 걸쳐서 돌아다니는데 그 dto안에 querydsl이 들어가 있게 된다.
+     * 1, 2, 3번째 방식 중 본인이 맞다고 생각하는 내용을 취사선택하면 된다.
+     * @throws Exception
+     */
+    @Test
+    public void findBuQueryProjection() throws Exception {
+        List<MemberDto> result = queryFactory
+                .select(new QMemberDto(member.username, member.age))
+                .from(member)
+                .fetch();
+
+        for (MemberDto memberDto : result) {
+            System.out.println("memberDto = " + memberDto);
         }
     }
 
