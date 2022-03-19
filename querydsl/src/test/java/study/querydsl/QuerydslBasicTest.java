@@ -1,9 +1,12 @@
 package study.querydsl;
 
+import com.querydsl.core.BooleanBuilder;
 import com.querydsl.core.QueryResults;
 import com.querydsl.core.Tuple;
 import com.querydsl.core.types.ExpressionUtils;
+import com.querydsl.core.types.Predicate;
 import com.querydsl.core.types.Projections;
+import com.querydsl.core.types.dsl.BooleanExpression;
 import com.querydsl.core.types.dsl.CaseBuilder;
 import com.querydsl.core.types.dsl.Expressions;
 import com.querydsl.jpa.JPAExpressions;
@@ -750,6 +753,180 @@ public class QuerydslBasicTest {
 
         for (MemberDto memberDto : result) {
             System.out.println("memberDto = " + memberDto);
+        }
+    }
+
+    /**
+     * 동적 쿼리 - BooleanBuilder 사용
+     */
+    @Test
+    public void dynamicQuery_BooleanBuilder() throws Exception {
+        String usernameParam = "member1";
+        Integer ageParam = 10;
+
+        List<Member> result = searchMember1(usernameParam, ageParam);
+        assertThat(result.size()).isEqualTo(1);
+    }
+    private List<Member> searchMember1(String usernameCond, Integer ageCond) {
+
+        BooleanBuilder builder = new BooleanBuilder();
+        if(usernameCond != null){       // username의 값이 있으면, builder에 해당 조건 적용
+            builder.and(member.username.eq(usernameCond));
+        }
+
+        if(ageCond != null){            // ageCond의 값이 있으면 builder에 해당 조건 적용
+            builder.and(member.age.eq(ageCond));
+        }
+
+        // 값이 들어와서 적용된다.
+        return queryFactory
+                .selectFrom(member)
+                .where(builder)
+                .fetch();
+        //    select
+        //    member0_.member_id as member_i1_1_,
+        //    member0_.age as age2_1_,
+        //    member0_.team_id as team_id4_1_,
+        //    member0_.username as username3_1_
+        //            from
+        //    member member0_
+        //    where
+        //    member0_.username=?
+        //    and member0_.age=?
+    }
+
+    /**
+     * 동적 쿼리 - where문 사용
+     * 이 방식은 위의 방식에 비해 메인 비즈니스 메소드가 짧아 확인하기가 쉽다.
+     * 이 덕분에 직관적으로 이해할 수 있는 함수를 만들고 이를 받으면 어떤 기능인지 더 빠르게 알 수 있다는 장점이 있다.
+     *
+     * 메서드 재활용이 가능하고, 쿼리의 가동성이 높아진다.
+     * 그리고 중요한 것이  만들어진 함수들을 합성해서 사용할 수도 있다.
+     */
+    @Test
+    public void dynamicQuery_whereParam() throws Exception {
+        String usernameParam = "member1";
+        Integer ageParam = 10;
+
+        List<Member> result = searchMember2(usernameParam, ageParam);
+        assertThat(result.size()).isEqualTo(1);
+    }
+
+    private List<Member> searchMember2(String usernameCond, Integer ageCond) {
+        return queryFactory
+                .selectFrom(member)
+                .where(allEq(usernameCond, ageCond))        // where에 null이 들어가면, 조건이 무시된다(그냥 없는거 취급함)
+                .fetch();
+    }
+    private BooleanExpression usernameEq(String usernameCond) {
+        return usernameCond != null ? member.username.eq(usernameCond) : null;
+    }
+    private BooleanExpression ageEq(Integer ageCond) {
+        return ageCond != null ? member.age.eq(ageCond) : null;
+    }
+
+    // 어러 조건들이 존재할 때 이를 사용하면 한꺼번에 처리 가능하다!!
+    private BooleanExpression allEq(String usernameCond, Integer ageCond){
+        return usernameEq(usernameCond).and(ageEq(ageCond));
+    }
+
+    /**
+     * 벌크 연산
+     * 28살 미만인 회원의 이름을 비회원으로 변경하기.
+     * querydsl도 마찬가지로 bulk연산 실행시 영속성 컨텍스트의 관리 대상에 해당하지 않는다.
+     */
+    @Test
+    public void bulkUpdate() throws Exception {
+
+        // member1 = 10, member2 = 20 -> 이 두 회원의 이름이 비회원으로 변경될 것이다.
+        long count = queryFactory
+                .update(member)
+                .set(member.username, "비회원")
+                .where(member.age.lt(28))
+                .execute();
+
+        // 그냥 벌크연산 하면 초기화 해주자. 이게 제일 깔끔하다.
+        em.flush();
+        em.clear();
+
+        // 위의 영속성 컨텍스트 초기화가 없다면 member1과 member2가 바꾸지 않고 보일 것이다.
+        // 초기화 후에는 1차캐시를 이용하지 않고 다시 검색해서 변경된 값을 찾아오게 될 것이다.
+
+        List<Member> result = queryFactory
+                .selectFrom(member)
+                .fetch();
+
+        for (Member member : result) {
+            System.out.println("member = " + member);
+        }
+    }
+
+    @Test
+    public void bulkAdd() throws Exception {
+        long count = queryFactory
+                .update(member)
+                .set(member.age, member.age.add(1))   // add / multiply
+                .execute();
+    }
+
+    @Test
+    public void bulkDelete() throws Exception {
+        // 18살 이상의 모든 회원 삭제
+        long result = queryFactory
+                .delete(member)
+                .where(member.age.gt(18))
+                .execute();
+    }
+
+    /**
+     * SQL function 호출하기
+     * member라는 단어를 M으로 바꾸어서 조회하는 function 구현
+     */
+    @Test
+    public void sqlFunction() throws Exception {
+        List<String> result = queryFactory
+                .select(
+                        Expressions.stringTemplate(
+                                "function('replace', {0}, {1}, {2})"
+                                , member.username, "member", "m"))
+                .from(member)
+                .fetch();
+
+        for (String s : result) {
+            System.out.println("s = " + s);
+
+//            select
+//            replace(member0_.username,
+//                    ?,
+//        ?) as col_0_0_
+//            from
+//            member member0_
+
+//            s = m1
+//            s = m2
+//            s = m3
+//            s = m4
+        }
+    }
+
+    /**
+     * sql function 호출.
+     * 소문자로 변경하기.
+     * @throws Exception
+     */
+    @Test
+    public void sqlFunction2() throws Exception {
+        List<String> result = queryFactory
+                .select(member.username)
+                .from(member)
+                // 이는 아래와 같은 기능을 하는 코드이다.
+//                .where(member.username.eq(
+//                        Expressions.stringTemplate("function('lower', {0}", member.username)))
+                .where(member.username.eq(member.username.lower()))     // 일반적으로 공통으로 ansi 표준으로 제공하는 것은 querydsl에서도 지원해준다.
+                .fetch();
+
+        for (String s : result) {
+            System.out.println("s = " + s);
         }
     }
 
